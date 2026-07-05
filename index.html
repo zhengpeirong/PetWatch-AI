@@ -649,6 +649,22 @@
       font-size: 0.94rem;
     }
 
+    .frame-preview {
+      display: none;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      padding: 14px 22px 0;
+    }
+
+    .frame-preview img {
+      width: 100%;
+      aspect-ratio: 9 / 16;
+      object-fit: cover;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f4fbf9;
+    }
+
     .mini-status {
       display: inline-block;
       margin-bottom: 11px;
@@ -1219,7 +1235,7 @@
       <div class="section-inner">
         <div class="section-heading">
           <h2 id="demo-title">Interactive local demo</h2>
-          <p>Choose a scenario, upload any local video file, and PetWatch will simulate the kind of owner-friendly analysis a production model could return.</p>
+          <p>Choose a scenario, upload a local video file, and PetWatch will sample three frames for an owner-friendly visible-signal review.</p>
         </div>
 
         <div class="demo-shell">
@@ -1274,7 +1290,7 @@
                 <h3>Overall risk level</h3>
                 <span class="risk-badge risk-normal" id="overall-risk">Normal</span>
               </div>
-              <p class="analysis-status" id="analysis-status">Ready to simulate a visible-signal review.</p>
+              <p class="analysis-status" id="analysis-status">Ready to analyze a visible-signal review.</p>
               <div class="progress-line" aria-hidden="true"><span></span></div>
             </div>
 
@@ -1295,6 +1311,8 @@
                 <p>Activity and posture appear normal in this sample.</p>
               </article>
             </div>
+
+            <div class="frame-preview" id="frame-preview" aria-label="Extracted video frames"></div>
 
             <div class="result-footer">
               <div class="next-step">
@@ -1571,9 +1589,13 @@
     const overallRisk = document.getElementById("overall-risk");
     const statusText = document.getElementById("analysis-status");
     const riskGrid = document.getElementById("risk-grid");
+    const framePreview = document.getElementById("frame-preview");
     const nextStep = document.getElementById("next-step");
+    const apiUrl = window.PETWATCH_API_URL
+      || (window.location.protocol === "file:" ? "http://127.0.0.1:8000/api/analyze-video" : "/api/analyze-video");
 
     let selectedFile = "";
+    let selectedUploadFile = null;
     let analysisTimer = null;
 
     function riskClass(value) {
@@ -1582,39 +1604,102 @@
       return "risk-badge risk-normal";
     }
 
-    function renderResult() {
-      const data = scenarios[scenarioSelect.value];
-      resultPet.textContent = `Pet: ${petType.value}`;
-      resultScenario.textContent = `Scenario: ${data.label}`;
-      resultSource.textContent = selectedFile ? `Source: ${selectedFile}` : "Source: Sample demo";
+    function normalizeRiskClass(value) {
+      if (value === "risk-vet") return "risk-vet";
+      if (value === "risk-monitor") return "risk-monitor";
+      return "risk-normal";
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function renderResult(data = scenarios[scenarioSelect.value], sourceLabel = null) {
+      resultPet.textContent = `Pet: ${data.pet || petType.value}`;
+      resultScenario.textContent = `Scenario: ${data.scenario || data.label}`;
+      resultSource.textContent = sourceLabel || (selectedFile ? `Source: ${selectedFile}` : "Source: Sample demo");
       overallRisk.textContent = data.overall;
       overallRisk.className = riskClass(data.className);
       riskGrid.innerHTML = data.cards.map(card => `
         <article class="risk-card">
-          <span class="mini-status ${card.className}">${card.status}</span>
-          <h4>${card.title}</h4>
-          <p>${card.text}</p>
+          <span class="mini-status ${normalizeRiskClass(card.className)}">${escapeHtml(card.status)}</span>
+          <h4>${escapeHtml(card.title)}</h4>
+          <p>${escapeHtml(card.text)}</p>
         </article>
       `).join("");
+      if (Array.isArray(data.frameUrls) && data.frameUrls.length) {
+        framePreview.style.display = "grid";
+        framePreview.innerHTML = data.frameUrls.slice(0, 3).map((url, index) => `
+          <img src="${escapeHtml(url)}" alt="Extracted frame ${index + 1}" loading="lazy" />
+        `).join("");
+      } else {
+        framePreview.style.display = "none";
+        framePreview.innerHTML = "";
+      }
       nextStep.textContent = data.next;
     }
 
-    function analyzeVideo(triggeredByUpload = false) {
+    async function analyzeVideo(triggeredByUpload = false) {
       clearTimeout(analysisTimer);
-      resultPanel.classList.add("is-loading");
-      statusText.textContent = triggeredByUpload
-        ? "Video selected. Simulating visible gait, posture, breathing, and behavior review..."
-        : "Simulating visible gait, posture, breathing, and behavior review...";
 
-      analysisTimer = setTimeout(() => {
+      if (!selectedUploadFile) {
+        resultPanel.classList.add("is-loading");
+        statusText.textContent = triggeredByUpload
+          ? "No video selected. Showing sample visible-signal data."
+          : "No video selected. Showing sample visible-signal data.";
+
+        analysisTimer = setTimeout(() => {
+          renderResult();
+          resultPanel.classList.remove("is-loading");
+          statusText.textContent = "Sample result loaded. Upload a video to run the backend model analysis.";
+        }, 360);
+        return;
+      }
+
+      resultPanel.classList.add("is-loading");
+      analyzeButton.disabled = true;
+      statusText.textContent = triggeredByUpload
+        ? "Video selected. Extracting three frames and asking the model..."
+        : "Extracting three frames and asking the model...";
+
+      const selectedScenario = scenarios[scenarioSelect.value];
+      const formData = new FormData();
+      formData.append("video", selectedUploadFile);
+      formData.append("pet_type", petType.value);
+      formData.append("scenario", selectedScenario.label);
+
+      try {
+        const response = await fetch(apiUrl, {
+          method: "POST",
+          body: formData
+        });
+
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.detail || "Backend analysis request failed.");
+        }
+
+        const frameLabel = payload.frameCount ? `${payload.frameCount} frames` : "3 frames";
+        const modelLabel = payload.model ? `Model: ${payload.model}` : `Source: ${selectedFile}`;
+        renderResult(payload, `${modelLabel} · ${frameLabel}`);
+        statusText.textContent = payload.summary || "Analysis complete. Review the risk card and suggested next step.";
+      } catch (error) {
         renderResult();
+        statusText.textContent = `Analysis failed: ${error.message}`;
+      } finally {
         resultPanel.classList.remove("is-loading");
-        statusText.textContent = "Analysis complete. Review the risk card and suggested next step.";
-      }, 520);
+        analyzeButton.disabled = false;
+      }
     }
 
     uploadInput.addEventListener("change", () => {
       const file = uploadInput.files && uploadInput.files[0];
+      selectedUploadFile = file || null;
       selectedFile = file ? file.name : "";
       fileName.textContent = selectedFile ? `Selected: ${selectedFile}` : "No file selected. The demo can still run with sample data.";
       if (selectedFile) analyzeVideo(true);

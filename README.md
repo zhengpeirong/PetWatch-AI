@@ -35,17 +35,55 @@ The interactive demo includes simulated results for:
 
 ## Technical Implementation
 
-This repository contains a pure frontend prototype:
+This repository now contains a frontend demo plus a lightweight local backend:
 
 - Single `index.html` file
 - HTML, CSS, and vanilla JavaScript only
-- No backend
+- `backend.py` FastAPI server for real video upload analysis
 - No build tool
 - No npm install
-- No external API key
-- No internet connection required to run locally
+- Poe OpenAI-compatible API integration
+- `ffmpeg`/`ffprobe` frame extraction
 
-To view the demo, open `index.html` directly in a browser.
+## Running the backend demo
+
+Install `ffmpeg` first:
+
+```bash
+brew install ffmpeg
+```
+
+Create a Python environment and install dependencies:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Configure Poe credentials:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and set `POE_API_KEY`. `POE_MODEL` defaults to the model shown in `.env.example`; change it to any Poe model/bot available to your account.
+
+Start the local server:
+
+```bash
+uvicorn backend:app --reload --host 127.0.0.1 --port 8000
+```
+
+Open `http://127.0.0.1:8000` in a browser, upload a short pet video, and the backend will:
+
+1. Accept the video upload.
+2. Extract three JPEG frames from the clip.
+3. Send the frames plus a PetWatch-specific prompt to Poe.
+4. Return structured risk cards and owner-friendly next-step guidance.
+
+Extracted frames are cached under `cache/frames/<cache-id>/frame_1.jpg` through `frame_3.jpg`.
+The API response also returns `frameUrls` and local `frameFiles` so you can verify exactly what was sent to Poe.
 
 ## Product Vision
 
